@@ -191,6 +191,27 @@ class TestOllamaLanguageModel(absltest.TestCase):
     self.assertEqual(call_args.kwargs["timeout"], 300)
 
   @mock.patch("requests.post")
+  def test_ollama_payload_includes_output_schema(self, mock_post):
+    """Ensure Ollama requests include the extraction JSON schema."""
+    mock_response = mock.Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "response": '{"extractions": []}',
+        "done": True,
+    }
+    mock_post.return_value = mock_response
+
+    model = ollama.OllamaLanguageModel(model_id="schema-test-model")
+
+    prompts = ["Schema prompt"]
+    list(model.infer(prompts))
+
+    mock_post.assert_called_once()
+    payload = mock_post.call_args.kwargs["json"]
+
+    self.assertEqual(payload["format"], ollama.OLLAMA_EXTRACTIONS_SCHEMA)
+
+  @mock.patch("requests.post")
   def test_ollama_stop_and_top_p_passthrough(self, mock_post):
     """Verify stop and top_p parameters are passed to Ollama API."""
     mock_response = mock.Mock()

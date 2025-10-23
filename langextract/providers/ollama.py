@@ -120,6 +120,19 @@ OLLAMA_FORMAT_HANDLER = fh.FormatHandler(
 )
 
 
+OLLAMA_EXTRACTIONS_SCHEMA = {
+    "type": "object",
+    "required": ["extractions"],
+    "properties": {
+        "extractions": {
+            "type": "array",
+            "items": {"type": "object", "additionalProperties": True},
+        }
+    },
+    "additionalProperties": False,
+}
+
+
 @router.register(
     *patterns.OLLAMA_PATTERNS,
     priority=patterns.OLLAMA_PRIORITY,
@@ -223,6 +236,7 @@ class OllamaLanguageModel(base_model.BaseLanguageModel):
     self._model = model_id
     self._model_url = base_url or model_url or _OLLAMA_DEFAULT_MODEL_URL
     self.format_type = format_type
+    self._output_schema = OLLAMA_EXTRACTIONS_SCHEMA
     self._constraint = constraint
 
     self._api_key = kwargs.pop('api_key', None)
@@ -403,8 +417,10 @@ class OllamaLanguageModel(base_model.BaseLanguageModel):
         'options': options,
     }
 
-    if structured_output_format is not None:
-      payload['format'] = structured_output_format
+    if self._output_schema is not None:
+      payload['format'] = self._output_schema
+    else:
+      payload['format'] = structured_output_format or 'json'
 
     if stop is not None:
       payload['stop'] = stop
