@@ -89,6 +89,43 @@ class ProviderSchemaDiscoveryTest(absltest.TestCase):
         msg="strict flag should be nested inside json_schema",
     )
 
+  def test_openai_schema_disallows_additional_properties(self):
+    """Structured outputs must explicitly disallow additional properties."""
+    examples = [
+        data.ExampleData(
+            text="Patient has diabetes.",
+            extractions=[
+                data.Extraction(
+                    extraction_class="condition",
+                    extraction_text="diabetes",
+                    attributes={"chronicity": "chronic"},
+                )
+            ],
+        )
+    ]
+
+    schema_obj = schemas.openai.OpenAISchema.from_examples(examples)
+    schema_dict = schema_obj.schema_dict
+
+    self.assertFalse(
+        schema_dict.get("additionalProperties", True),
+        msg="Root schema must set additionalProperties to False",
+    )
+    extraction_schema = schema_dict["properties"][data.EXTRACTIONS_KEY][
+        "items"
+    ]
+    self.assertFalse(
+        extraction_schema.get("additionalProperties", True),
+        msg="Extraction object must disallow additional properties",
+    )
+    attributes_schema = extraction_schema["properties"][
+        "condition_attributes"
+    ]
+    self.assertFalse(
+        attributes_schema.get("additionalProperties", True),
+        msg="Attribute objects must disallow additional properties",
+    )
+
 
 class FormatModeSchemaTest(absltest.TestCase):
   """Tests for FormatModeSchema implementation."""

@@ -70,11 +70,13 @@ def _build_extraction_schema(
         "type": "object",
         "properties": attr_properties,
         "nullable": True,
+        "additionalProperties": False,
     }
 
   return {
       "type": "object",
       "properties": extraction_properties,
+      "additionalProperties": False,
   }
 
 
@@ -141,6 +143,7 @@ class OpenAISchema(schema.BaseSchema):
             }
         },
         "required": [data.EXTRACTIONS_KEY],
+        "additionalProperties": False,
     }
 
     return cls(_schema_dict=schema_dict)
