@@ -17,8 +17,10 @@ from __future__ import annotations
 
 from langextract.providers.schemas import gemini
 from langextract.providers.schemas import ollama
+from langextract.providers.schemas import openai
 
 GeminiSchema = gemini.GeminiSchema  # Backward compat
 OllamaSchema = ollama.OllamaSchema
+OpenAISchema = openai.OpenAISchema
 
-__all__ = ["GeminiSchema", "OllamaSchema"]
+__all__ = ["GeminiSchema", "OllamaSchema", "OpenAISchema"]

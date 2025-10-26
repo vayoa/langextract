@@ -28,6 +28,7 @@ from langextract.core import schema
 from langextract.core import types as core_types
 from langextract.providers import patterns
 from langextract.providers import router
+from langextract.providers import schemas
 
 
 @router.register(
@@ -42,6 +43,7 @@ class OpenAILanguageModel(base_model.BaseLanguageModel):
   api_key: str | None = None
   base_url: str | None = None
   organization: str | None = None
+  openai_schema: schemas.openai.OpenAISchema | None = None
   format_type: data.FormatType = data.FormatType.JSON
   temperature: float | None = None
   max_workers: int = 10
@@ -49,6 +51,18 @@ class OpenAILanguageModel(base_model.BaseLanguageModel):
   _extra_kwargs: dict[str, Any] = dataclasses.field(
       default_factory=dict, repr=False, compare=False
   )
+
+  @classmethod
+  def get_schema_class(cls) -> type[schema.BaseSchema] | None:
+    """Return the OpenAISchema class for structured output support."""
+    return schemas.openai.OpenAISchema
+
+  def apply_schema(self, schema_instance: schema.BaseSchema | None) -> None:
+    super().apply_schema(schema_instance)
+    if isinstance(schema_instance, schemas.openai.OpenAISchema):
+      self.openai_schema = schema_instance
+    else:
+      self.openai_schema = None
 
   @property
   def requires_fence_output(self) -> bool:
@@ -63,6 +77,7 @@ class OpenAILanguageModel(base_model.BaseLanguageModel):
       api_key: str | None = None,
       base_url: str | None = None,
       organization: str | None = None,
+      openai_schema: schemas.openai.OpenAISchema | None = None,
       format_type: data.FormatType = data.FormatType.JSON,
       temperature: float | None = None,
       max_workers: int = 10,
@@ -95,6 +110,7 @@ class OpenAILanguageModel(base_model.BaseLanguageModel):
     self.api_key = api_key
     self.base_url = base_url
     self.organization = organization
+    self.openai_schema = openai_schema
     self.format_type = format_type
     self.temperature = temperature
     self.max_workers = max_workers
