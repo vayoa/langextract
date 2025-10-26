@@ -80,7 +80,8 @@ Provider names can be:
 ### 1. Core Providers (Always Available)
 Ships with langextract, dependencies included:
 - **Gemini** (`gemini.py`): Google's Gemini models
-- **Ollama** (`ollama.py`): Local models via Ollama
+- **Ollama** (`ollama.py`): Local models via Ollama (now enforces the same
+  example-derived JSON schema as Gemini for structured extraction)
 
 ### 2. Built-in Provider with Optional Dependencies
 Ships with langextract, but requires extra installation:

@@ -100,6 +100,7 @@ from langextract.core import schema
 from langextract.core import types as core_types
 from langextract.providers import patterns
 from langextract.providers import router
+from langextract.providers import schemas
 
 # Ollama defaults
 _OLLAMA_DEFAULT_MODEL_URL = 'http://localhost:11434'
@@ -162,14 +163,12 @@ class OllamaLanguageModel(base_model.BaseLanguageModel):
   _auth_scheme: str = 'Bearer'
   _auth_header: str = 'Authorization'
 
+  _output_schema: dict[str, Any] | None = None
+
   @classmethod
   def get_schema_class(cls) -> type[schema.BaseSchema] | None:
-    """Return the FormatModeSchema class for JSON output support.
-
-    Returns:
-      The FormatModeSchema class that enables JSON mode (non-strict).
-    """
-    return schema.FormatModeSchema
+    """Return the OllamaSchema class for structured output support."""
+    return schemas.OllamaSchema
 
   def __repr__(self) -> str:
     """Return string representation with redacted API key."""
@@ -189,6 +188,7 @@ class OllamaLanguageModel(base_model.BaseLanguageModel):
       base_url: str | None = None,  # Alias for model_url
       format_type: core_types.FormatType | None = None,
       structured_output_format: str | None = None,  # Deprecated
+      output_schema: dict[str, Any] | None = None,
       constraint: schema.Constraint = schema.Constraint(),
       timeout: int | None = None,
       **kwargs,
@@ -201,6 +201,7 @@ class OllamaLanguageModel(base_model.BaseLanguageModel):
       base_url: Alternative parameter name for Ollama server URL.
       format_type: Output format (JSON or YAML). Defaults to JSON.
       structured_output_format: DEPRECATED - use format_type instead.
+      output_schema: Optional JSON schema dictionary for structured outputs.
       constraint: Schema constraints.
       timeout: Request timeout in seconds. Defaults to 120.
       **kwargs: Additional parameters.
@@ -236,7 +237,7 @@ class OllamaLanguageModel(base_model.BaseLanguageModel):
     self._model = model_id
     self._model_url = base_url or model_url or _OLLAMA_DEFAULT_MODEL_URL
     self.format_type = format_type
-    self._output_schema = OLLAMA_EXTRACTIONS_SCHEMA
+    self._output_schema = output_schema or OLLAMA_EXTRACTIONS_SCHEMA
     self._constraint = constraint
 
     self._api_key = kwargs.pop('api_key', None)
@@ -257,6 +258,12 @@ class OllamaLanguageModel(base_model.BaseLanguageModel):
     if timeout is not None:
       kwargs['timeout'] = timeout
     self._extra_kwargs = kwargs or {}
+
+  def apply_schema(self, schema_instance: schema.BaseSchema | None) -> None:
+    """Attach schema and sync the provider's output schema."""
+    super().apply_schema(schema_instance)
+    if isinstance(schema_instance, schemas.OllamaSchema):
+      self._output_schema = schema_instance.schema_dict
 
   def infer(
       self, batch_prompts: Sequence[str], **kwargs

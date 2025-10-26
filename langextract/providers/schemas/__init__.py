@@ -16,7 +16,9 @@
 from __future__ import annotations
 
 from langextract.providers.schemas import gemini
+from langextract.providers.schemas import ollama
 
 GeminiSchema = gemini.GeminiSchema  # Backward compat
+OllamaSchema = ollama.OllamaSchema
 
-__all__ = ["GeminiSchema"]
+__all__ = ["GeminiSchema", "OllamaSchema"]

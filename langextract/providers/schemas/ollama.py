@@ -1,0 +1,138 @@
+# Copyright 2025 Google LLC.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Schema implementation for Ollama structured output.
+
+This mirrors the schema generation strategy used by the Gemini provider so
+Ollama can enforce the same JSON structure derived from few-shot examples.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+import dataclasses
+from typing import Any
+import warnings
+
+from langextract.core import data
+from langextract.core import format_handler as fh
+from langextract.core import schema
+
+
+@dataclasses.dataclass
+class OllamaSchema(schema.BaseSchema):
+  """Schema implementation for Ollama structured output."""
+
+  _schema_dict: dict[str, Any]
+
+  @property
+  def schema_dict(self) -> dict[str, Any]:
+    """Returns the schema dictionary."""
+    return self._schema_dict
+
+  @schema_dict.setter
+  def schema_dict(self, schema_dict: dict[str, Any]) -> None:
+    """Sets the schema dictionary."""
+    self._schema_dict = schema_dict
+
+  def to_provider_config(self) -> dict[str, Any]:
+    """Convert schema to Ollama-specific configuration."""
+    return {"output_schema": self._schema_dict}
+
+  @property
+  def requires_raw_output(self) -> bool:
+    """Ollama JSON schema enforces raw JSON (no code fences)."""
+    return True
+
+  def validate_format(self, format_handler: fh.FormatHandler) -> None:
+    """Validate format settings for Ollama structured output."""
+    if format_handler.use_fences:
+      warnings.warn(
+          "Ollama schema enforcement expects raw JSON without code fences.",
+          UserWarning,
+          stacklevel=3,
+      )
+
+    if (
+        not format_handler.use_wrapper
+        or format_handler.wrapper_key != data.EXTRACTIONS_KEY
+    ):
+      warnings.warn(
+          "Ollama's structured output expects a wrapper key equal to "
+          f"'{data.EXTRACTIONS_KEY}'.",
+          UserWarning,
+          stacklevel=3,
+      )
+
+  @classmethod
+  def from_examples(
+      cls,
+      examples_data: Sequence[data.ExampleData],
+      attribute_suffix: str = data.ATTRIBUTE_SUFFIX,
+  ) -> OllamaSchema:
+    """Creates an OllamaSchema from example extractions."""
+    extraction_categories: dict[str, dict[str, set[type]]] = {}
+    for example in examples_data:
+      for extraction in example.extractions:
+        category = extraction.extraction_class
+        if category not in extraction_categories:
+          extraction_categories[category] = {}
+
+        if extraction.attributes:
+          for attr_name, attr_value in extraction.attributes.items():
+            attr_types = extraction_categories[category].setdefault(
+                attr_name, set()
+            )
+            attr_types.add(type(attr_value))
+
+    extraction_properties: dict[str, dict[str, Any]] = {}
+
+    for category, attrs in extraction_categories.items():
+      extraction_properties[category] = {"type": "string"}
+
+      attributes_field = f"{category}{attribute_suffix}"
+      attr_properties: dict[str, Any] = {}
+
+      if not attrs:
+        attr_properties["_unused"] = {"type": "string"}
+      else:
+        for attr_name, attr_types in attrs.items():
+          if list in attr_types:
+            attr_properties[attr_name] = {
+                "type": "array",
+                "items": {"type": "string"},
+            }
+          else:
+            attr_properties[attr_name] = {"type": "string"}
+
+      extraction_properties[attributes_field] = {
+          "type": "object",
+          "properties": attr_properties,
+          "nullable": True,
+      }
+
+    extraction_schema = {
+        "type": "object",
+        "properties": extraction_properties,
+    }
+
+    schema_dict = {
+        "type": "object",
+        "properties": {
+            data.EXTRACTIONS_KEY: {"type": "array", "items": extraction_schema}
+        },
+        "required": [data.EXTRACTIONS_KEY],
+    }
+
+    return cls(_schema_dict=schema_dict)
