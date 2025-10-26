@@ -97,8 +97,8 @@ class OpenAISchema(schema.BaseSchema):
             "json_schema": {
                 "name": self.name,
                 "schema": self._schema_dict,
+                "strict": self.strict,
             },
-            "strict": self.strict,
         }
     }
 
@@ -156,5 +156,5 @@ class OpenAISchema(schema.BaseSchema):
       self.name = name
     if schema_dict := json_schema.get("schema"):
       self._schema_dict = schema_dict
-    if "strict" in response_format:
-      self.strict = bool(response_format["strict"])
+    if "strict" in json_schema:
+      self.strict = bool(json_schema["strict"])

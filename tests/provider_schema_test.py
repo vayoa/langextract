@@ -59,6 +59,36 @@ class ProviderSchemaDiscoveryTest(absltest.TestCase):
         msg="OpenAILanguageModel should return OpenAISchema",
     )
 
+  def test_openai_schema_places_strict_inside_json_schema(self):
+    """Ensure strict flag lives inside json_schema per OpenAI spec."""
+    examples = [
+        data.ExampleData(
+            text="Example",
+            extractions=[
+                data.Extraction(
+                    extraction_class="category",
+                    extraction_text="Sample",
+                    attributes={"score": "high"},
+                )
+            ],
+        )
+    ]
+
+    schema_obj = schemas.openai.OpenAISchema.from_examples(examples)
+    provider_cfg = schema_obj.to_provider_config()
+
+    response_format = provider_cfg["response_format"]
+    self.assertEqual(response_format["type"], "json_schema")
+    self.assertNotIn(
+        "strict",
+        response_format,
+        msg="Top-level response_format must not include strict",
+    )
+    self.assertTrue(
+        response_format["json_schema"].get("strict"),
+        msg="strict flag should be nested inside json_schema",
+    )
+
 
 class FormatModeSchemaTest(absltest.TestCase):
   """Tests for FormatModeSchema implementation."""
