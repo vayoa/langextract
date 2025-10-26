@@ -436,6 +436,13 @@ class Resolver(AbstractResolver):
             )
           continue
 
+        if extraction_value is None:
+          logging.debug(
+              "No extraction value provided for %s. Skipping extraction.",
+              extraction_class,
+          )
+          continue
+
         if not isinstance(extraction_value, (str, int, float)):
           logging.error(
               "Extraction text must be a string, integer, or float. Found: %s",
