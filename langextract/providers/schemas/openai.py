@@ -49,33 +49,31 @@ def _build_extraction_schema(
   extraction_properties: dict[str, dict[str, Any]] = {}
 
   for category, attrs in extraction_categories.items():
-    extraction_properties[category] = {"type": "string"}
+    extraction_properties[category] = {"type": ["string", "null"]}
 
     attributes_field = f"{category}{attribute_suffix}"
     attr_properties: dict[str, Any] = {}
 
-    if not attrs:
-      attr_properties["_unused"] = {"type": "string"}
-    else:
-      for attr_name, attr_types in attrs.items():
-        if list in attr_types:
-          attr_properties[attr_name] = {
-              "type": "array",
-              "items": {"type": "string"},
-          }
-        else:
-          attr_properties[attr_name] = {"type": "string"}
+    for attr_name, attr_types in attrs.items():
+      if list in attr_types:
+        attr_properties[attr_name] = {
+            "type": ["array", "null"],
+            "items": {"type": "string"},
+        }
+      else:
+        attr_properties[attr_name] = {"type": ["string", "null"]}
 
     extraction_properties[attributes_field] = {
-        "type": "object",
+        "type": ["object", "null"],
         "properties": attr_properties,
-        "nullable": True,
+        "required": sorted(attr_properties.keys()),
         "additionalProperties": False,
     }
 
   return {
       "type": "object",
       "properties": extraction_properties,
+      "required": sorted(extraction_properties.keys()),
       "additionalProperties": False,
   }
 

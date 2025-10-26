@@ -118,12 +118,22 @@ class ProviderSchemaDiscoveryTest(absltest.TestCase):
         extraction_schema.get("additionalProperties", True),
         msg="Extraction object must disallow additional properties",
     )
+    self.assertCountEqual(
+        extraction_schema.get("required", []),
+        ["condition", "condition_attributes"],
+        msg="Extraction object must require every declared property",
+    )
     attributes_schema = extraction_schema["properties"][
         "condition_attributes"
     ]
     self.assertFalse(
         attributes_schema.get("additionalProperties", True),
         msg="Attribute objects must disallow additional properties",
+    )
+    self.assertCountEqual(
+        attributes_schema.get("required", []),
+        ["chronicity"],
+        msg="Attribute schema must require each attribute key",
     )
 
 
