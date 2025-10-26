@@ -739,6 +739,31 @@ class TestOpenAILanguageModel(absltest.TestCase):
     self.assertNotIn("temperature", call_args.kwargs)
 
   @mock.patch("openai.OpenAI")
+  def test_openai_temperature_zero_gpt5_dropped(self, mock_openai_class):
+    """GPT-5 variants drop temperature=0.0 to avoid API errors."""
+
+    mock_client = mock.Mock()
+    mock_openai_class.return_value = mock_client
+
+    mock_response = mock.Mock()
+    mock_response.choices = [
+        mock.Mock(message=mock.Mock(content='{"result": "test"}'))
+    ]
+    mock_client.chat.completions.create.return_value = mock_response
+
+    model = openai.OpenAILanguageModel(
+        api_key="test-key",
+        model_id="gpt-5-nano-2025-08-07",
+        temperature=0.0,
+    )
+
+    list(model.infer(["test prompt"]))
+
+    call_args = mock_client.chat.completions.create.call_args
+    self.assertNotIn("temperature", call_args.kwargs)
+    self.assertEqual(call_args.kwargs["model"], "gpt-5-nano-2025-08-07")
+
+  @mock.patch("openai.OpenAI")
   def test_openai_none_values_filtered(self, mock_openai_class):
     """Test that None values are not passed to the API."""
     mock_client = mock.Mock()

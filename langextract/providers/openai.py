@@ -21,6 +21,8 @@ import concurrent.futures
 import dataclasses
 from typing import Any, Iterator, Sequence
 
+import logging
+
 from langextract.core import base_model
 from langextract.core import data
 from langextract.core import exceptions
@@ -29,6 +31,8 @@ from langextract.core import types as core_types
 from langextract.providers import patterns
 from langextract.providers import router
 from langextract.providers import schemas
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @router.register(
@@ -70,6 +74,34 @@ class OpenAILanguageModel(base_model.BaseLanguageModel):
     if self.format_type == data.FormatType.JSON:
       return False
     return super().requires_fence_output
+
+  def _normalize_temperature_value(
+      self, temperature: float | None, *, source: str
+  ) -> float | None:
+    """Clamp temperature for models with restricted settings.
+
+    Some GPT-5 variants only support the provider-default temperature (1.0).
+    For those models we silently drop caller-provided 0.0 so the OpenAI API
+    applies its default instead of returning a 400.
+    """
+
+    if temperature is None:
+      return None
+
+    model_lower = (self.model_id or '').lower()
+    if not model_lower:
+      return temperature
+
+    if model_lower.startswith(('gpt-5', 'gpt5')) and abs(temperature) == 0.0:
+      _LOGGER.info(
+          "Dropping temperature=0.0 for %s (source=%s) to satisfy model"
+          " defaults.",
+          self.model_id,
+          source,
+      )
+      return None
+
+    return temperature
 
   def __init__(
       self,
@@ -174,6 +206,7 @@ class OpenAILanguageModel(base_model.BaseLanguageModel):
       }
 
       temp = normalized_config.get('temperature', self.temperature)
+      temp = self._normalize_temperature_value(temp, source='runtime')
       if temp is not None:
         api_params['temperature'] = temp
 
@@ -226,6 +259,7 @@ class OpenAILanguageModel(base_model.BaseLanguageModel):
     config = {}
 
     temp = merged_kwargs.get('temperature', self.temperature)
+    temp = self._normalize_temperature_value(temp, source='config')
     if temp is not None:
       config['temperature'] = temp
     if 'max_output_tokens' in merged_kwargs:
