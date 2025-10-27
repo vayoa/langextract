@@ -50,13 +50,90 @@ class ProviderSchemaDiscoveryTest(absltest.TestCase):
         msg="OllamaLanguageModel should return FormatModeSchema class",
     )
 
-  def test_openai_returns_none(self):
-    """Test that OpenAILanguageModel returns None (no schema support yet)."""
-    # OpenAI imports dependencies in __init__, not at module level
+  def test_openai_returns_openai_schema(self):
+    """Test that OpenAILanguageModel now returns OpenAISchema."""
     schema_class = openai.OpenAILanguageModel.get_schema_class()
-    self.assertIsNone(
+    self.assertEqual(
         schema_class,
-        msg="OpenAILanguageModel should return None (no schema support)",
+        schemas.openai.OpenAISchema,
+        msg="OpenAILanguageModel should return OpenAISchema",
+    )
+
+  def test_openai_schema_places_strict_inside_json_schema(self):
+    """Ensure strict flag lives inside json_schema per OpenAI spec."""
+    examples = [
+        data.ExampleData(
+            text="Example",
+            extractions=[
+                data.Extraction(
+                    extraction_class="category",
+                    extraction_text="Sample",
+                    attributes={"score": "high"},
+                )
+            ],
+        )
+    ]
+
+    schema_obj = schemas.openai.OpenAISchema.from_examples(examples)
+    provider_cfg = schema_obj.to_provider_config()
+
+    response_format = provider_cfg["response_format"]
+    self.assertEqual(response_format["type"], "json_schema")
+    self.assertNotIn(
+        "strict",
+        response_format,
+        msg="Top-level response_format must not include strict",
+    )
+    self.assertTrue(
+        response_format["json_schema"].get("strict"),
+        msg="strict flag should be nested inside json_schema",
+    )
+
+  def test_openai_schema_disallows_additional_properties(self):
+    """Structured outputs must explicitly disallow additional properties."""
+    examples = [
+        data.ExampleData(
+            text="Patient has diabetes.",
+            extractions=[
+                data.Extraction(
+                    extraction_class="condition",
+                    extraction_text="diabetes",
+                    attributes={"chronicity": "chronic"},
+                )
+            ],
+        )
+    ]
+
+    schema_obj = schemas.openai.OpenAISchema.from_examples(examples)
+    schema_dict = schema_obj.schema_dict
+
+    self.assertFalse(
+        schema_dict.get("additionalProperties", True),
+        msg="Root schema must set additionalProperties to False",
+    )
+    extraction_schema = schema_dict["properties"][data.EXTRACTIONS_KEY][
+        "items"
+    ]
+    self.assertFalse(
+        extraction_schema.get("additionalProperties", True),
+        msg="Extraction object must disallow additional properties",
+    )
+    self.assertCountEqual(
+        extraction_schema.get("required", []),
+        ["condition", "condition_attributes"],
+        msg="Extraction object must require every declared property",
+    )
+    attributes_schema = extraction_schema["properties"][
+        "condition_attributes"
+    ]
+    self.assertFalse(
+        attributes_schema.get("additionalProperties", True),
+        msg="Attribute objects must disallow additional properties",
+    )
+    self.assertCountEqual(
+        attributes_schema.get("required", []),
+        ["chronicity"],
+        msg="Attribute schema must require each attribute key",
     )
 
 

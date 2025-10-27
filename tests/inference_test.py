@@ -191,6 +191,27 @@ class TestOllamaLanguageModel(absltest.TestCase):
     self.assertEqual(call_args.kwargs["timeout"], 300)
 
   @mock.patch("requests.post")
+  def test_ollama_payload_includes_output_schema(self, mock_post):
+    """Ensure Ollama requests include the extraction JSON schema."""
+    mock_response = mock.Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "response": '{"extractions": []}',
+        "done": True,
+    }
+    mock_post.return_value = mock_response
+
+    model = ollama.OllamaLanguageModel(model_id="schema-test-model")
+
+    prompts = ["Schema prompt"]
+    list(model.infer(prompts))
+
+    mock_post.assert_called_once()
+    payload = mock_post.call_args.kwargs["json"]
+
+    self.assertEqual(payload["format"], ollama.OLLAMA_EXTRACTIONS_SCHEMA)
+
+  @mock.patch("requests.post")
   def test_ollama_stop_and_top_p_passthrough(self, mock_post):
     """Verify stop and top_p parameters are passed to Ollama API."""
     mock_response = mock.Mock()
@@ -716,6 +737,31 @@ class TestOpenAILanguageModel(absltest.TestCase):
 
     call_args = mock_client.chat.completions.create.call_args
     self.assertNotIn("temperature", call_args.kwargs)
+
+  @mock.patch("openai.OpenAI")
+  def test_openai_temperature_zero_gpt5_dropped(self, mock_openai_class):
+    """GPT-5 variants drop temperature=0.0 to avoid API errors."""
+
+    mock_client = mock.Mock()
+    mock_openai_class.return_value = mock_client
+
+    mock_response = mock.Mock()
+    mock_response.choices = [
+        mock.Mock(message=mock.Mock(content='{"result": "test"}'))
+    ]
+    mock_client.chat.completions.create.return_value = mock_response
+
+    model = openai.OpenAILanguageModel(
+        api_key="test-key",
+        model_id="gpt-5-nano-2025-08-07",
+        temperature=0.0,
+    )
+
+    list(model.infer(["test prompt"]))
+
+    call_args = mock_client.chat.completions.create.call_args
+    self.assertNotIn("temperature", call_args.kwargs)
+    self.assertEqual(call_args.kwargs["model"], "gpt-5-nano-2025-08-07")
 
   @mock.patch("openai.OpenAI")
   def test_openai_none_values_filtered(self, mock_openai_class):

@@ -264,6 +264,25 @@ class ExtractOrderedEntitiesTest(parameterized.TestCase):
           ],
       ),
       dict(
+          testcase_name="none_values_skipped",
+          test_input=[{
+              "medication": None,
+              "medication_index": 1,
+              "dosage": "325mg",
+              "dosage_index": 2,
+              "notes": None,
+              "notes_index": 3,
+          }],
+          expected_output=[
+              data.Extraction(
+                  extraction_class="dosage",
+                  extraction_text="325mg",
+                  extraction_index=2,
+                  group_index=0,
+              ),
+          ],
+      ),
+      dict(
           testcase_name="all_indices_missing",
           test_input=[
               {"medication": "Aspirin", "dosage": "325mg"},
