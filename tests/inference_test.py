@@ -34,6 +34,17 @@ from langextract.providers import ollama
 from langextract.providers import openai
 
 
+class _FakeClientError(Exception):
+
+  __module__ = "google.genai.errors"
+
+  def __init__(self, payload):
+    super().__init__("429 RESOURCE_EXHAUSTED.", payload)
+    self.status_code = 429
+    self.code = 429
+    self.response_json = payload
+
+
 class TestBaseLanguageModel(absltest.TestCase):
 
   def test_merge_kwargs_with_none(self):
@@ -366,6 +377,90 @@ class TestOllamaLanguageModel(absltest.TestCase):
 
 
 class TestGeminiLanguageModel(absltest.TestCase):
+
+  @mock.patch("langextract.providers.gemini.time.sleep")
+  @mock.patch("google.genai.Client")
+  def test_gemini_retries_minute_rate_limit(
+      self, mock_client_class, mock_sleep
+  ):
+    mock_client = mock.Mock()
+    mock_client_class.return_value = mock_client
+
+    payload = {
+        "error": {
+            "code": 429,
+            "message": "Quota exceeded.",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                    "violations": [
+                        {
+                            "quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier",
+                            "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+                        }
+                    ],
+                },
+                {
+                    "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                    "retryDelay": "7s",
+                },
+            ],
+        }
+    }
+    mock_error = _FakeClientError(payload)
+
+    mock_response = mock.Mock()
+    mock_response.text = '{"result": "ok"}'
+    mock_client.models.generate_content.side_effect = [mock_error, mock_response]
+
+    model = gemini.GeminiLanguageModel(
+        model_id="gemini-2.5-flash", api_key="test-key"
+    )
+
+    results = list(model.infer(["hello"]))
+
+    self.assertEqual(2, mock_client.models.generate_content.call_count)
+    mock_sleep.assert_called_once()
+    waited = mock_sleep.call_args.args[0]
+    self.assertAlmostEqual(7 * 1.15, waited, delta=1e-6)
+    self.assertEqual("{\"result\": \"ok\"}", results[0][0].output)
+
+  @mock.patch("langextract.providers.gemini.time.sleep")
+  @mock.patch("google.genai.Client")
+  def test_gemini_does_not_retry_daily_quota(
+      self, mock_client_class, mock_sleep
+  ):
+    mock_client = mock.Mock()
+    mock_client_class.return_value = mock_client
+
+    payload = {
+        "error": {
+            "code": 429,
+            "message": "Daily quota exceeded.",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                    "violations": [
+                        {
+                            "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+    mock_client.models.generate_content.side_effect = [_FakeClientError(payload)]
+
+    model = gemini.GeminiLanguageModel(
+        model_id="gemini-2.5-flash", api_key="test-key"
+    )
+
+    with self.assertRaisesRegex(
+        exceptions.InferenceRuntimeError, "Gemini API error"
+    ):
+      list(model.infer(["hello"]))
+
+    mock_sleep.assert_not_called()
 
   @mock.patch("google.genai.Client")
   def test_gemini_allowlist_filtering(self, mock_client_class):

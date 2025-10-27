@@ -17,9 +17,12 @@
 
 from __future__ import annotations
 
+import ast
 import concurrent.futures
 import dataclasses
-from typing import Any, Final, Iterator, Sequence
+import time
+from collections.abc import Mapping
+from typing import Any, ClassVar, Final, Iterator, Sequence
 
 from absl import logging
 
@@ -50,6 +53,10 @@ _API_CONFIG_KEYS: Final[set[str]] = {
 @dataclasses.dataclass(init=False)
 class GeminiLanguageModel(base_model.BaseLanguageModel):  # pylint: disable=too-many-instance-attributes
   """Language model inference using Google's Gemini API with structured output."""
+
+  _RATE_LIMIT_BACKOFF_MULTIPLIER: ClassVar[float] = 1.15
+  _MAX_RATE_LIMIT_RETRIES: ClassVar[int] = 5
+  _MIN_RETRY_SLEEP_SECONDS: ClassVar[float] = 0.1
 
   model_id: str = 'gemini-2.5-flash'
   api_key: str | None = None
@@ -183,32 +190,181 @@ class GeminiLanguageModel(base_model.BaseLanguageModel):  # pylint: disable=too-
       self, prompt: str, config: dict
   ) -> core_types.ScoredOutput:
     """Process a single prompt and return a ScoredOutput."""
-    try:
-      # Apply stored kwargs that weren't already set in config
-      for key, value in self._extra_kwargs.items():
-        if key not in config and value is not None:
-          config[key] = value
+    for attempt in range(self._MAX_RATE_LIMIT_RETRIES + 1):
+      try:
+        # Apply stored kwargs that weren't already set in config
+        for key, value in self._extra_kwargs.items():
+          if key not in config and value is not None:
+            config[key] = value
 
-      if self.gemini_schema:
-        # Structured output requires JSON format
-        if self.format_type != data.FormatType.JSON:
-          raise exceptions.InferenceConfigError(
-              'Gemini structured output only supports JSON format. '
-              'Set format_type=JSON or use_schema_constraints=False.'
+        if self.gemini_schema:
+          # Structured output requires JSON format
+          if self.format_type != data.FormatType.JSON:
+            raise exceptions.InferenceConfigError(
+                'Gemini structured output only supports JSON format. '
+                'Set format_type=JSON or use_schema_constraints=False.'
+            )
+          config.setdefault('response_mime_type', 'application/json')
+          config.setdefault('response_schema', self.gemini_schema.schema_dict)
+
+        response = self._client.models.generate_content(
+            model=self.model_id, contents=prompt, config=config
+        )
+
+        return core_types.ScoredOutput(score=1.0, output=response.text)
+
+      except Exception as e:  # pylint: disable=broad-except
+        wait_seconds = self._extract_minute_rate_limit_delay(e)
+        should_retry = (
+            wait_seconds is not None and attempt < self._MAX_RATE_LIMIT_RETRIES
+        )
+        if should_retry:
+          sleep_seconds = max(
+              wait_seconds * self._RATE_LIMIT_BACKOFF_MULTIPLIER,
+              self._MIN_RETRY_SLEEP_SECONDS,
           )
-        config.setdefault('response_mime_type', 'application/json')
-        config.setdefault('response_schema', self.gemini_schema.schema_dict)
+          logging.warning(
+              'Gemini minute rate limit hit; retrying in %.2fs (attempt %d/%d).',
+              sleep_seconds,
+              attempt + 1,
+              self._MAX_RATE_LIMIT_RETRIES,
+          )
+          time.sleep(sleep_seconds)
+          continue
 
-      response = self._client.models.generate_content(
-          model=self.model_id, contents=prompt, config=config
-      )
+        raise exceptions.InferenceRuntimeError(
+            f'Gemini API error: {str(e)}', original=e
+        ) from e
 
-      return core_types.ScoredOutput(score=1.0, output=response.text)
+  def _extract_minute_rate_limit_delay(self, error: Exception) -> float | None:
+    client_error = self._unwrap_client_error(error)
+    if client_error is None:
+      return None
 
-    except Exception as e:
-      raise exceptions.InferenceRuntimeError(
-          f'Gemini API error: {str(e)}', original=e
-      ) from e
+    status_code = getattr(client_error, 'status_code', None)
+    if status_code != 429:
+      status_code = getattr(client_error, 'code', None)
+      if status_code != 429:
+        return None
+
+    payload = self._extract_error_payload(client_error)
+    if not isinstance(payload, Mapping):
+      return None
+
+    details = payload.get('details', [])
+    if not isinstance(details, Sequence) or isinstance(details, (str, bytes)):
+      return None
+    if not self._has_minute_quota_violation(details):
+      return None
+
+    retry_value = self._find_retry_delay(details)
+    if retry_value is None:
+      retry_value = payload.get('retryDelay') or payload.get('retry_delay')
+    if retry_value is None:
+      retry_value = getattr(client_error, 'retry_delay', None)
+
+    return self._coerce_retry_delay_seconds(retry_value)
+
+  def _unwrap_client_error(self, error: Exception) -> Exception | None:
+    if self._is_client_error_instance(error):
+      return error
+    cause = getattr(error, '__cause__', None)
+    if isinstance(cause, Exception) and self._is_client_error_instance(cause):
+      return cause
+    context = getattr(error, '__context__', None)
+    if isinstance(context, Exception) and self._is_client_error_instance(context):
+      return context
+    return None
+
+  def _is_client_error_instance(self, error: Exception) -> bool:
+    return (
+        error.__class__.__name__ == 'ClientError'
+        and error.__class__.__module__ == 'google.genai.errors'
+    )
+
+  def _extract_error_payload(self, error: Exception) -> Mapping[str, Any] | None:
+    # Prefer structured payloads attached to the error when available.
+    response_json = getattr(error, 'response_json', None)
+    if isinstance(response_json, Mapping):
+      nested_error = response_json.get('error')
+      if isinstance(nested_error, Mapping):
+        return nested_error
+      return response_json
+
+    for arg in getattr(error, 'args', ()):  # pragma: no branch
+      if isinstance(arg, Mapping):
+        nested_error = arg.get('error') if hasattr(arg, 'get') else None
+        if isinstance(nested_error, Mapping):
+          return nested_error
+        return arg
+
+    text = str(error)
+    brace_index = text.find('{')
+    if brace_index == -1:
+      return None
+    try:
+      parsed = ast.literal_eval(text[brace_index:])
+    except (SyntaxError, ValueError):  # pragma: no cover - defensive
+      return None
+    if isinstance(parsed, Mapping):
+      nested_error = parsed.get('error') if hasattr(parsed, 'get') else None
+      if isinstance(nested_error, Mapping):
+        return nested_error
+      return parsed
+    return None
+
+  def _has_minute_quota_violation(self, details: Sequence[Any]) -> bool:
+    for detail in details:
+      if not isinstance(detail, Mapping):
+        continue
+      if not detail.get('@type', '').endswith('QuotaFailure'):
+        continue
+      violations = detail.get('violations') or []
+      if not isinstance(violations, Sequence) or isinstance(violations, (str, bytes)):
+        continue
+      for violation in violations:
+        if not isinstance(violation, Mapping):
+          continue
+        quota_id = violation.get('quotaId') or violation.get('quota_id')
+        if isinstance(quota_id, str) and 'PerMinute' in quota_id:
+          return True
+    return False
+
+  def _find_retry_delay(self, details: Sequence[Any]) -> Any:
+    for detail in details:
+      if not isinstance(detail, Mapping):
+        continue
+      if not detail.get('@type', '').endswith('RetryInfo'):
+        continue
+      retry_delay = detail.get('retryDelay')
+      if retry_delay is None:
+        retry_delay = detail.get('retry_delay')
+      if retry_delay is not None:
+        return retry_delay
+    return None
+
+  def _coerce_retry_delay_seconds(self, value: Any) -> float | None:
+    if value is None:
+      return None
+    if isinstance(value, (int, float)):
+      return max(float(value), 0.0)
+    if isinstance(value, str):
+      trimmed = value.strip().lower()
+      if trimmed.endswith('s'):
+        trimmed = trimmed[:-1]
+      try:
+        return max(float(trimmed), 0.0)
+      except ValueError:
+        return None
+    if isinstance(value, Mapping):
+      seconds = value.get('seconds')
+      nanos = value.get('nanos')
+      if seconds is None and nanos is None:
+        return None
+      seconds_value = float(seconds) if seconds is not None else 0.0
+      nanos_value = float(nanos) if nanos is not None else 0.0
+      return max(seconds_value + nanos_value / 1_000_000_000, 0.0)
+    return None
 
   def infer(
       self, batch_prompts: Sequence[str], **kwargs
